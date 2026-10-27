@@ -1,0 +1,1068 @@
+From 6daf91531ccdf0ade6f0b5907757db64f5f71110 Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Sat, 17 Oct 2026 22:36:44 +0000
+Subject: [PATCH 1/7] build: lower minSdk to 16 and pin API 16 capable
+ toolchain/dependencies
+
+- minSdk 24 -> 16 (ui, tunnel); legacy multidex; vector drawables kept as XML
+- AndroidX/Material pinned to the last releases that still support API 16
+- zxing-android-embedded without transitive deps + zxing core 3.3.0
+- NDK r23c (last NDK that can target API 16-18)
+- Go 1.24.3 -> 1.23.12 (Go 1.24+ needs Linux >= 3.2)
+- ndk-compat: getline() shim for bionic < API 18
+---
+ gradle/libs.versions.toml                     | 28 ++++++------
+ tunnel/build.gradle.kts                       |  4 +-
+ tunnel/tools/libwg-go/Makefile                | 10 +++--
+ tunnel/tools/ndk-compat/compat.c              | 43 +++++++++++++++++++
+ tunnel/tools/ndk-compat/compat.h              |  6 +++
+ ui/build.gradle.kts                           | 13 +++++-
+ .../list_item_background.xml                  |  0
+ 7 files changed, 85 insertions(+), 19 deletions(-)
+ rename ui/src/main/res/{drawable => drawable-v21}/list_item_background.xml (100%)
+
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+index 9d383ca8..5993e8af 100644
+--- a/gradle/libs.versions.toml
++++ b/gradle/libs.versions.toml
+@@ -1,25 +1,29 @@
++# Android 4.1 (API 16) fork: AndroidX/Material versions below are the last releases that still declare
++# minSdk <= 16 (AndroidX moved to minSdk 19 with the October 2023 releases; material 1.12 needs 19, 1.13 needs 21).
+ [versions]
+ agp = "9.1.0"
+ 
+ [libraries]
+-androidx-activity-ktx = "androidx.activity:activity-ktx:1.13.0"
+-androidx-annotation = "androidx.annotation:annotation:1.9.1"
+-androidx-appcompat = "androidx.appcompat:appcompat:1.7.1"
++androidx-activity-ktx = "androidx.activity:activity-ktx:1.7.2"
++androidx-annotation = "androidx.annotation:annotation:1.6.0"
++androidx-appcompat = "androidx.appcompat:appcompat:1.6.1"
+ androidx-biometric = "androidx.biometric:biometric:1.1.0"
+-androidx-collection = "androidx.collection:collection:1.6.0"
+-androidx-constraintlayout = "androidx.constraintlayout:constraintlayout:2.2.1"
+-androidx-coordinatorlayout = "androidx.coordinatorlayout:coordinatorlayout:1.3.0"
+-androidx-core-ktx = "androidx.core:core-ktx:1.18.0"
+-androidx-datastore-preferences = "androidx.datastore:datastore-preferences:1.2.1"
+-androidx-fragment-ktx = "androidx.fragment:fragment-ktx:1.8.9"
+-androidx-lifecycle-runtime-ktx = "androidx.lifecycle:lifecycle-runtime-ktx:2.10.0"
++androidx-collection = "androidx.collection:collection:1.2.0"
++androidx-constraintlayout = "androidx.constraintlayout:constraintlayout:2.1.4"
++androidx-coordinatorlayout = "androidx.coordinatorlayout:coordinatorlayout:1.2.0"
++androidx-core-ktx = "androidx.core:core-ktx:1.10.1"
++androidx-datastore-preferences = "androidx.datastore:datastore-preferences:1.0.0"
++androidx-fragment-ktx = "androidx.fragment:fragment-ktx:1.6.2"
++androidx-lifecycle-runtime-ktx = "androidx.lifecycle:lifecycle-runtime-ktx:2.6.2"
++androidx-multidex = "androidx.multidex:multidex:2.0.1"
+ androidx-preference-ktx = "androidx.preference:preference-ktx:1.2.1"
+ desugarJdkLibs = "com.android.tools:desugar_jdk_libs:2.1.5"
+-google-material = "com.google.android.material:material:1.13.0"
++google-material = "com.google.android.material:material:1.11.0"
+ jsr305 = "com.google.code.findbugs:jsr305:3.0.2"
+ junit = "junit:junit:4.13.2"
+-kotlinx-coroutines-android = "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
++kotlinx-coroutines-android = "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+ zxing-android-embedded = "com.journeyapps:zxing-android-embedded:4.3.0"
++zxing-core = "com.google.zxing:core:3.3.0"
+ 
+ [plugins]
+ android-application = { id = "com.android.application", version.ref = "agp" }
+ diff --git a/tunnel/build.gradle.kts b/tunnel/build.gradle.kts
+index 26cda3df..6287184e 100644
+--- a/tunnel/build.gradle.kts
++++ b/tunnel/build.gradle.kts
+@@ -18,8 +18,10 @@ android {
+         targetCompatibility = JavaVersion.VERSION_17
+     }
+     namespace = "${pkg}.tunnel"
++    // NDK r23 is the last release that can target API 16-18 (r24 raised the floor to 19, r26 to 21).
++    ndkVersion = "23.2.8568313"
+     defaultConfig {
+-        minSdk = 24
++        minSdk = 16
+     }
+     externalNativeBuild {
+         cmake {
+ diff --git a/tunnel/tools/libwg-go/Makefile b/tunnel/tools/libwg-go/Makefile
+index 5b34355c..280ddd74 100644
+--- a/tunnel/tools/libwg-go/Makefile
++++ b/tunnel/tools/libwg-go/Makefile
+@@ -20,12 +20,14 @@ export GOARCH := $(NDK_GO_ARCH_MAP_$(ANDROID_ARCH_NAME))
+ export GOOS := android
+ export CGO_ENABLED := 1
+ 
+-GO_VERSION := 1.24.3
++# Go 1.23.x is the last release line that supports Linux kernels older than 3.2 (Go 1.24+ requires 3.2 or later).
++# Android 4.1 devices commonly ship 3.0.x/3.1.x kernels, so this fork builds wireguard-go with the final 1.23 release.
++GO_VERSION := 1.23.12
+ GO_PLATFORM := $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(NDK_GO_ARCH_MAP_$(shell uname -m))
+ GO_TARBALL := go$(GO_VERSION).$(GO_PLATFORM).tar.gz
+-GO_HASH_darwin-amd64 := 13e6fe3fcf65689d77d40e633de1e31c6febbdbcb846eb05fc2434ed2213e92e
+-GO_HASH_darwin-arm64 := 64a3fa22142f627e78fac3018ce3d4aeace68b743eff0afda8aae0411df5e4fb
+-GO_HASH_linux-amd64 := 3333f6ea53afa971e9078895eaa4ac7204a8c6b5c68c10e6bc9a33e8e391bdd8
++GO_HASH_darwin-amd64 := 0f6efdc3ffc6f03b230016acca0aef43c229de022d0ff401e7aa4ad4862eca8e
++GO_HASH_darwin-arm64 := 5bfa117e401ae64e7ffb960243c448b535fe007e682a13ff6c7371f4a6f0ccaa
++GO_HASH_linux-amd64 := d3847fef834e9db11bf64e3fb34db9c04db14e068eeb064f49af747010454f90
+ 
+ default: $(DESTDIR)/libwg-go.so
+ 
+ diff --git a/tunnel/tools/ndk-compat/compat.c b/tunnel/tools/ndk-compat/compat.c
+index 3c293e7e..163b77a5 100644
+--- a/tunnel/tools/ndk-compat/compat.c
++++ b/tunnel/tools/ndk-compat/compat.c
+@@ -19,6 +19,49 @@ char *strchrnul(const char *s, int c)
+ }
+ #endif
+ 
++#if defined(__ANDROID_MIN_SDK_VERSION__) && __ANDROID_MIN_SDK_VERSION__ < 18
++#undef FILE_IS_EMPTY
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/types.h>
++
++ssize_t getline(char **lineptr, size_t *n, FILE *stream)
++{
++        size_t len = 0;
++        int c;
++
++        if (!lineptr || !n || !stream) {
++                errno = EINVAL;
++                return -1;
++        }
++        if (!*lineptr || !*n) {
++                char *p = realloc(*lineptr, 128);
++                if (!p)
++                        return -1;
++                *lineptr = p;
++                *n = 128;
++        }
++        while ((c = getc(stream)) != EOF) {
++                if (len + 2 > *n) {
++                        size_t new_size = *n * 2;
++                        char *p = realloc(*lineptr, new_size);
++                        if (!p)
++                                return -1;
++                        *lineptr = p;
++                        *n = new_size;
++                }
++                (*lineptr)[len++] = (char)c;
++                if (c == '\n')
++                        break;
++        }
++        if (!len)
++                return -1;
++        (*lineptr)[len] = '\0';
++        return (ssize_t)len;
++}
++#endif
++
+ #ifdef FILE_IS_EMPTY
+ #undef FILE_IS_EMPTY
+ static char ____x __attribute__((unused));
+ diff --git a/tunnel/tools/ndk-compat/compat.h b/tunnel/tools/ndk-compat/compat.h
+index 9931c70c..60569d16 100644
+--- a/tunnel/tools/ndk-compat/compat.h
++++ b/tunnel/tools/ndk-compat/compat.h
+@@ -8,3 +8,9 @@
+ char *strchrnul(const char *s, int c);
+ #endif
+ 
++/* bionic only gained getline() in API 18. */
++#if defined(__ANDROID_MIN_SDK_VERSION__) && __ANDROID_MIN_SDK_VERSION__ < 18
++#include <stdio.h>
++#include <sys/types.h>
++ssize_t getline(char **lineptr, size_t *n, FILE *stream);
++#endif
+ diff --git a/ui/build.gradle.kts b/ui/build.gradle.kts
+@@ -17,7 +17,13 @@ android {
+     namespace = pkg
+     defaultConfig {
+         applicationId = pkg
+-        minSdk = 24
++        minSdk = 16
++        targetSdk = 36
++        // Legacy multidex is required below API 21 (the app + core library desugaring exceed 64K methods in debug builds).
++        multiDexEnabled = true
++        // Keep vector drawables as XML (rendered through AppCompat's VectorDrawableCompat) instead of rasterizing them
++        // to PNGs: several icons are tinted with theme attributes, which PNG generation cannot express.
++        vectorDrawables.useSupportLibrary = true
+         versionCode = providers.gradleProperty("wireguardVersionCode").get().toInt()
+         versionName = providers.gradleProperty("wireguardVersionName").get()
+         buildConfigField("int", "MIN_SDK_VERSION", minSdk.toString())
+@@ -71,9 +77,12 @@ dependencies {
+     implementation(libs.androidx.fragment.ktx)
+     implementation(libs.androidx.preference.ktx)
+     implementation(libs.androidx.lifecycle.runtime.ktx)
++    implementation(libs.androidx.multidex)
+     implementation(libs.androidx.datastore.preferences)
+     implementation(libs.google.material)
+-    implementation(libs.zxing.android.embedded)
++    // zxing-android-embedded pulls in zxing:core 3.4.x (needs Java 8 APIs from API 24); use 3.3.0 for older devices.
++    implementation(libs.zxing.android.embedded) { isTransitive = false }
++    implementation(libs.zxing.core)
+     implementation(libs.kotlinx.coroutines.android)
+     coreLibraryDesugaring(libs.desugarJdkLibs)
+ }
+ diff --git a/ui/src/main/res/drawable/list_item_background.xml b/ui/src/main/res/drawable-v21/list_item_background.xml
+ similarity index 100%
+ rename from ui/src/main/res/drawable/list_item_background.xml
+ rename to ui/src/main/res/drawable-v21/list_item_background.xml
+-- 
+2.43.0
+
+
+From 8413db4817ef073c87ccb51eb7947260b13b08a2 Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Sat, 17 Oct 2026 22:36:44 +0000
+Subject: [PATCH 2/7] tunnel: support API 16+
+
+Guard/replace APIs newer than API 16 (VpnService.Builder per-app/blocking/allowFamily,
+OsConstants, getCodeCacheDir, SUPPORTED_ABIS, StandardCharsets, CompletableFuture, List.of/Set.of).
+Refuse per-app rules and skip IPv6 where VpnService cannot support them.
+---
+ .../android/backend/BackendException.java     |  1 +
+ .../wireguard/android/backend/GoBackend.java  | 89 +++++++++++++++----
+ .../android/backend/WgQuickBackend.java       |  8 +-
+ .../com/wireguard/android/util/ApiCompat.java | 53 +++++++++++
+ .../com/wireguard/android/util/RootShell.java | 15 ++--
+ .../android/util/SharedLibraryLoader.java     |  7 +-
+ .../android/util/ToolsInstaller.java         | 15 ++--
+ .../java/com/wireguard/config/Interface.java  |  5 +-
+ 8 files changed, 155 insertions(+), 38 deletions(-)
+ create mode 100644 tunnel/src/main/java/com/wireguard/android/util/ApiCompat.java
+
+diff --git a/tunnel/src/main/java/com/wireguard/android/backend/BackendException.java b/tunnel/src/main/java/com/wireguard/android/backend/BackendException.java
+index 94f7b098..72b0a86a 100644
+--- a/tunnel/src/main/java/com/wireguard/android/backend/BackendException.java
++++ b/tunnel/src/main/java/com/wireguard/android/backend/BackendException.java
+@@ -57,5 +57,6 @@ public final class BackendException extends Exception {
+         TUN_CREATION_ERROR,
+         GO_ACTIVATION_ERROR_CODE,
+         DNS_RESOLUTION_FAILURE,
++        PER_APP_VPN_UNSUPPORTED,
+     }
+ }
+diff --git a/tunnel/src/main/java/com/wireguard/android/backend/GoBackend.java b/tunnel/src/main/java/com/wireguard/android/backend/GoBackend.java
+index 1b91aeda..4bda9bff 100644
+--- a/tunnel/src/main/java/com/wireguard/android/backend/GoBackend.java
++++ b/tunnel/src/main/java/com/wireguard/android/backend/GoBackend.java
+@@ -9,7 +9,6 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.os.Build;
+ import android.os.ParcelFileDescriptor;
+-import android.system.OsConstants;
+ import android.util.Log;
+ 
+ import com.wireguard.android.backend.BackendException.Reason;
+@@ -23,11 +22,13 @@ import com.wireguard.crypto.Key;
+ import com.wireguard.crypto.KeyFormatException;
+ import com.wireguard.util.NonNullForAll;
+ 
++import java.net.Inet6Address;
+ import java.net.InetAddress;
+ import java.util.Collections;
+ import java.util.Set;
+-import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.ExecutionException;
++import java.util.concurrent.FutureTask;
++import java.util.concurrent.LinkedBlockingQueue;
+ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.TimeoutException;
+ 
+@@ -43,7 +44,7 @@ public final class GoBackend implements Backend {
+     private static final int DNS_RESOLUTION_RETRIES = 10;
+     private static final String TAG = "WireGuard/GoBackend";
+     @Nullable private static AlwaysOnCallback alwaysOnCallback;
+-    private static CompletableFuture<VpnService> vpnService = new CompletableFuture<>();
++    private static GhettoCompletableFuture<VpnService> vpnService = new GhettoCompletableFuture<>();
+     private final Context context;
+     @Nullable private Config currentConfig;
+     @Nullable private Tunnel currentTunnel;
+@@ -192,6 +193,8 @@ public final class GoBackend implements Backend {
+      */
+     @Override
+     public boolean isAlwaysOn() throws ExecutionException, InterruptedException, TimeoutException {
++        if (Build.VERSION.SDK_INT < 29 /* Q */)
++            return false;
+         return vpnService.get(0, TimeUnit.NANOSECONDS).isAlwaysOn();
+     }
+ 
+@@ -201,6 +204,8 @@ public final class GoBackend implements Backend {
+      */
+     @Override
+     public boolean isLockdownEnabled() throws ExecutionException, InterruptedException, TimeoutException {
++        if (Build.VERSION.SDK_INT < 29 /* Q */)
++            return false;
+         return vpnService.get(0, TimeUnit.NANOSECONDS).isLockdownEnabled();
+     }
+ 
+@@ -248,6 +253,12 @@ public final class GoBackend implements Backend {
+             if (config == null)
+                 throw new BackendException(Reason.TUNNEL_MISSING_CONFIG);
+ 
++            // VpnService.Builder.addAllowedApplication()/addDisallowedApplication() only exist from API 21. Silently
++            // ignoring the lists would send traffic through (or around) the tunnel contrary to what the config asks for.
++            if (Build.VERSION.SDK_INT < 21 && (!config.getInterface().getExcludedApplications().isEmpty()
++                    || !config.getInterface().getIncludedApplications().isEmpty()))
++                throw new BackendException(Reason.PER_APP_VPN_UNSUPPORTED);
++
+             if (VpnService.prepare(context) != null)
+                 throw new BackendException(Reason.VPN_NOT_AUTHORIZED);
+ 
+@@ -297,14 +308,22 @@ public final class GoBackend implements Backend {
+             final VpnService.Builder builder = service.getBuilder();
+             builder.setSession(tunnel.getName());
+ 
+-            for (final String excludedApplication : config.getInterface().getExcludedApplications())
+-                builder.addDisallowedApplication(excludedApplication);
++            if (Build.VERSION.SDK_INT >= 21 /* L */) {
++                for (final String excludedApplication : config.getInterface().getExcludedApplications())
++                    builder.addDisallowedApplication(excludedApplication);
+ 
+-            for (final String includedApplication : config.getInterface().getIncludedApplications())
+-                builder.addAllowedApplication(includedApplication);
++                for (final String includedApplication : config.getInterface().getIncludedApplications())
++                    builder.addAllowedApplication(includedApplication);
++            }
+ 
+-            for (final InetNetwork addr : config.getInterface().getAddresses())
++            for (final InetNetwork addr : config.getInterface().getAddresses()) {
++                if (Build.VERSION.SDK_INT < 21 /* L */ && addr.getAddress() instanceof Inet6Address) {
++                    // IPv6 inside a VpnService only works from Android 5.0; older releases reject or mishandle it.
++                    Log.w(TAG, "Ignoring IPv6 address " + addr + ": not supported by VpnService before Android 5.0");
++                    continue;
++                }
+                 builder.addAddress(addr.getAddress(), addr.getMask());
++            }
+ 
+             for (final InetAddress addr : config.getInterface().getDnsServers())
+                 builder.addDnsServer(addr.getHostAddress());
+@@ -317,28 +336,40 @@ public final class GoBackend implements Backend {
+                 for (final InetNetwork addr : peer.getAllowedIps()) {
+                     if (addr.getMask() == 0)
+                         sawDefaultRoute = true;
++                    if (Build.VERSION.SDK_INT < 21 /* L */ && addr.getAddress() instanceof Inet6Address) {
++                        Log.w(TAG, "Ignoring IPv6 route " + addr + ": not supported by VpnService before Android 5.0");
++                        continue;
++                    }
+                     builder.addRoute(addr.getAddress(), addr.getMask());
+                 }
+             }
+ 
+             // "Kill-switch" semantics
+-            if (!(sawDefaultRoute && config.getPeers().size() == 1)) {
+-                builder.allowFamily(OsConstants.AF_INET);
+-                builder.allowFamily(OsConstants.AF_INET6);
++            // (allowFamily() exists from API 21; before that nothing is blocked per address family anyway.)
++            if (Build.VERSION.SDK_INT >= 21 /* L */ && !(sawDefaultRoute && config.getPeers().size() == 1)) {
++                builder.allowFamily(2 /* OsConstants.AF_INET */);
++                builder.allowFamily(10 /* OsConstants.AF_INET6 */);
+             }
+ 
+             builder.setMtu(config.getInterface().getMtu().orElse(1280));
+ 
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                 builder.setMetered(false);
+-            service.setUnderlyingNetworks(null);
++            if (Build.VERSION.SDK_INT >= 22 /* L MR1 */)
++                service.setUnderlyingNetworks(null);
+ 
+-            builder.setBlocking(true);
+-            try (final ParcelFileDescriptor tun = builder.establish()) {
++            // Before API 21 the tun fd is always non-blocking, which is what wireguard-go sets up for itself anyway.
++            if (Build.VERSION.SDK_INT >= 21 /* L */)
++                builder.setBlocking(true);
++            final ParcelFileDescriptor tun = builder.establish();
++            try {
+                 if (tun == null)
+                     throw new BackendException(Reason.TUN_CREATION_ERROR);
+                 Log.d(TAG, "Go backend " + wgVersion());
+                 currentTunnelHandle = wgTurnOn(tunnel.getName(), tun.detachFd(), goConfig);
++            } finally {
++                if (tun != null)
++                    tun.close();
+             }
+             if (currentTunnelHandle < 0)
+                 throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, currentTunnelHandle);
+@@ -374,6 +405,31 @@ public final class GoBackend implements Backend {
+         void alwaysOnTriggered();
+     }
+ 
++    // Minimal stand-in for CompletableFuture, which only exists from API 24.
++    private static final class GhettoCompletableFuture<V> {
++        private final LinkedBlockingQueue<V> completion = new LinkedBlockingQueue<>(1);
++        private final FutureTask<V> result = new FutureTask<>(completion::peek);
++
++        public boolean complete(final V value) {
++            final boolean offered = completion.offer(value);
++            if (offered)
++                result.run();
++            return offered;
++        }
++
++        public V get() throws ExecutionException, InterruptedException {
++            return result.get();
++        }
++
++        public V get(final long timeout, final TimeUnit unit) throws ExecutionException, InterruptedException, TimeoutException {
++            return result.get(timeout, unit);
++        }
++
++        public boolean isDone() {
++            return !completion.isEmpty();
++        }
++    }
++
+     /**
+      * {@link android.net.VpnService} implementation for {@link GoBackend}
+      */
+@@ -403,10 +459,7 @@ public final class GoBackend implements Backend {
+                     tunnel.onStateChange(State.DOWN);
+                 }
+             }
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+-                vpnService = vpnService.newIncompleteFuture();
+-            else
+-                vpnService = new CompletableFuture<>();
++            vpnService = new GhettoCompletableFuture<>();
+             super.onDestroy();
+         }
+ 
+ diff --git a/tunnel/src/main/java/com/wireguard/android/backend/WgQuickBackend.java b/tunnel/src/main/java/com/wireguard/android/backend/WgQuickBackend.java
+index af96ddae..3d68d9cf 100644
+--- a/tunnel/src/main/java/com/wireguard/android/backend/WgQuickBackend.java
++++ b/tunnel/src/main/java/com/wireguard/android/backend/WgQuickBackend.java
+@@ -19,12 +19,14 @@ import com.wireguard.util.NonNullForAll;
+ 
+ import java.io.File;
+ import java.io.FileOutputStream;
+-import java.nio.charset.StandardCharsets;
++import java.nio.charset.Charset;
+ import java.time.Instant;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.LinkedList;
+ import java.util.List;
+ import java.util.Locale;
+@@ -71,7 +73,7 @@ public final class WgQuickBackend implements Backend {
+             return Collections.emptySet();
+         }
+         // wg puts all interface names on the same line. Split them into separate elements.
+-        return Set.of(output.get(0).split(" "));
++        return new HashSet<>(Arrays.asList(output.get(0).split(" ")));
+     }
+ 
+     @Override
+@@ -184,7 +186,7 @@ public final class WgQuickBackend implements Backend {
+ 
+         final File tempFile = new File(localTemporaryDir, tunnel.getName() + ".conf");
+         try (final FileOutputStream stream = new FileOutputStream(tempFile, false)) {
+-            stream.write(config.toWgQuickString().getBytes(StandardCharsets.UTF_8));
++            stream.write(config.toWgQuickString().getBytes(Charset.forName("UTF-8")));
+         }
+         String command = String.format("wg-quick %s '%s'",
+                 state.toString().toLowerCase(Locale.ENGLISH), tempFile.getAbsolutePath());
+ diff --git a/tunnel/src/main/java/com/wireguard/android/util/ApiCompat.java b/tunnel/src/main/java/com/wireguard/android/util/ApiCompat.java
+new file mode 100644
+index 00000000..51fcf667
+--- /dev/null
++++ b/tunnel/src/main/java/com/wireguard/android/util/ApiCompat.java
+@@ -0,0 +1,53 @@
++/*
++ * Copyright © 2017-2025 WireGuard LLC. All Rights Reserved.
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.wireguard.android.util;
++
++import android.content.Context;
++import android.os.Build;
++
++import com.wireguard.util.NonNullForAll;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Helpers for framework calls that do not exist on the oldest supported Android releases (API 16+).
++ */
++@NonNullForAll
++final class ApiCompat {
++    private ApiCompat() {
++    }
++
++    /**
++     * {@link Context#getCodeCacheDir()} only exists from API 21; emulate it the same way ContextCompat does.
++     */
++    static File getCodeCacheDir(final Context context) {
++        if (Build.VERSION.SDK_INT >= 21 /* L */)
++            return context.getCodeCacheDir();
++        final File dir = new File(context.getApplicationInfo().dataDir, "code_cache");
++        // noinspection ResultOfMethodCallIgnored
++        dir.mkdirs();
++        return dir;
++    }
++
++    /**
++     * {@code Build.SUPPORTED_ABIS} only exists from API 21; older releases expose at most two ABIs via
++     * the deprecated {@code CPU_ABI}/{@code CPU_ABI2} fields.
++     */
++    @SuppressWarnings("deprecation")
++    static String[] getSupportedAbis() {
++        if (Build.VERSION.SDK_INT >= 21 /* L */)
++            return Build.SUPPORTED_ABIS;
++        final List<String> abis = new ArrayList<>(2);
++        for (final String abi : new String[]{Build.CPU_ABI, Build.CPU_ABI2}) {
++            // noinspection ConstantConditions
++            if (abi != null && !abi.isEmpty() && !"unknown".equals(abi) && !abis.contains(abi))
++                abis.add(abi);
++        }
++        return abis.toArray(new String[0]);
++    }
++}
++diff --git a/tunnel/src/main/java/com/wireguard/android/util/RootShell.java b/tunnel/src/main/java/com/wireguard/android/util/RootShell.java
++index 5839ec67..6244fc17 100644
++--- a/tunnel/src/main/java/com/wireguard/android/util/RootShell.java
+++++ b/tunnel/src/main/java/com/wireguard/android/util/RootShell.java
++@@ -16,7 +16,7 @@ import java.io.File;
++ import java.io.IOException;
++ import java.io.InputStreamReader;
++ import java.io.OutputStreamWriter;
++-import java.nio.charset.StandardCharsets;
+++import java.nio.charset.Charset;
++ import java.util.Collection;
++ import java.util.UUID;
++
++@@ -30,6 +30,8 @@ public class RootShell {
++     private static final String SU = "su";
++     private static final String TAG = "WireGuard/RootShell";
+++    // java.nio.charset.StandardCharsets only exists from API 19.
+++    private static final Charset UTF_8 = Charset.forName("UTF-8");
++
++     private final File localBinaryDir;
++     private final File localTemporaryDir;
+@@ -41,7 +43,7 @@ public class RootShell {
++     @Nullable private BufferedReader stdout;
++
++     public RootShell(final Context context) {
++        localBinaryDir = new File(ApiCompat.getCodeCacheDir(context), "bin");
++        localTemporaryDir = new File(context.getCacheDir(), "tmp");
++        final String packageName = context.getPackageName();
++        if (packageName.contains("'"))
++@@ -151,16 +153,17 @@ public class RootShell {
++                    rse.initCause(e);
++                    throw rse;
++                }
++                stdin = new OutputStreamWriter(process.getOutputStream(), UTF_8);
++                stdout = new BufferedReader(new InputStreamReader(process.getInputStream(),
++                        UTF_8));
++                stderr = new BufferedReader(new InputStreamReader(process.getErrorStream(),
++                        UTF_8));
++                stdin.write(preamble);
++                stdin.flush();
++                // Check that the shell started successfully.
++                final String uid = stdout.readLine();
++                // Android's pre-6.0 toolbox ignores "-u" and prints "uid=0(root) gid=0(root) ...".
++                if (!"0".equals(uid) && (uid == null || !uid.startsWith("uid=0("))) {
++                    Log.w(TAG, "Root check did not return correct UID: " + uid);
++                    throw new RootShellException(Reason.NO_ROOT_ACCESS);
++                }
++diff --git a/tunnel/src/main/java/com/wireguard/android/util/SharedLibraryLoader.java b/tunnel/src/main/java/com/wireguard/android/util/SharedLibraryLoader.java
++index 98e3e63d..41f5265b 100644
++--- a/tunnel/src/main/java/com/wireguard/android/util/SharedLibraryLoader.java
+++++ b/tunnel/src/main/java/com/wireguard/android/util/SharedLibraryLoader.java
++@@ -36,10 +36,11 @@ public final class SharedLibraryLoader {
++         final Collection<String> apks = new HashSet<>();
++         if (context.getApplicationInfo().sourceDir != null)
++             apks.add(context.getApplicationInfo().sourceDir);
++-        if (context.getApplicationInfo().splitSourceDirs != null)
+++        // Split APKs only exist from API 21.
+++        if (Build.VERSION.SDK_INT >= 21 /* L */ && context.getApplicationInfo().splitSourceDirs != null)
++             apks.addAll(Arrays.asList(context.getApplicationInfo().splitSourceDirs));
+ 
++-        for (final String abi : Build.SUPPORTED_ABIS) {
+++        for (final String abi : ApiCompat.getSupportedAbis()) {
++             for (final String apk : apks) {
++                 try (final ZipFile zipFile = new ZipFile(new File(apk), ZipFile.OPEN_READ)) {
++                     final String mappedLibName = System.mapLibraryName(libName);
+@@ -75,7 +76,7 @@ public final class SharedLibraryLoader {
++         }
++         File f = null;
++         try {
++            f = File.createTempFile("lib", ".so", ApiCompat.getCodeCacheDir(context));
++            if (extractLibrary(context, libName, f)) {
++                System.load(f.getAbsolutePath());
++                return;
++            }
++        }
++        }
++        }
++diff --git a/tunnel/src/main/java/com/wireguard/android/util/ToolsInstaller.java b/tunnel/src/main/java/com/wireguard/android/util/ToolsInstaller.java
++index d3882498..08b43855 100644
++--- a/tunnel/src/main/java/com/wireguard/android/util/ToolsInstaller.java
+++++ b/tunnel/src/main/java/com/wireguard/android/util/ToolsInstaller.java
++@@ -6,7 +6,6 @@
++ package com.wireguard.android.util;
++
++ import android.content.Context;
++-import android.system.OsConstants;
++ import android.util.Log;
+@@ -28,6 +27,10 @@ import androidx.annotation.RestrictTo.Scope;
+ 
++ @NonNullForAll
++ public final class ToolsInstaller {
+++    // android.system.OsConstants only exists from API 21; these are the Linux errno/exit values it would return.
+++    private static final int EALREADY = 114;
+++    private static final int ENOENT = 2;
+++    private static final int EXIT_SUCCESS = 0;
+     public static final int ERROR = 0x0;
+     public static final int MAGISK = 0x4;
+     public static final int NO = 0x2;
+@@ -49,7 +52,7 @@ public final class ToolsInstaller {
+     @Nullable private Boolean installAsMagiskModule;
+ 
+     public ToolsInstaller(final Context context, final RootShell rootShell) {
+-        localBinaryDir = new File(context.getCodeCacheDir(), "bin");
++        localBinaryDir = new File(ApiCompat.getCodeCacheDir(context), "bin");
+         this.context = context;
+         this.rootShell = rootShell;
+     }
+@@ -76,10 +79,10 @@ public final class ToolsInstaller {
+                     new File(localBinaryDir, name).getAbsolutePath(),
+                     new File(INSTALL_DIR, name).getAbsolutePath()));
+         }
+-        script.append("exit ").append(OsConstants.EALREADY).append(';');
++        script.append("exit ").append(EALREADY).append(';');
+         try {
+             final int ret = rootShell.run(null, script.toString());
+-            if (ret == OsConstants.EALREADY)
++            if (ret == EALREADY)
+                 return willInstallAsMagiskModule() ? YES | MAGISK : YES | SYSTEM;
+             else
+                 return willInstallAsMagiskModule() ? NO | MAGISK : NO | SYSTEM;
+@@ -167,7 +170,7 @@ public final class ToolsInstaller {
+ 
+     private int installSystem() throws RootShellException, IOException {
+         if (INSTALL_DIR == null)
+-            return OsConstants.ENOENT;
++            return ENOENT;
+         extract();
+         final StringBuilder script = new StringBuilder("set -ex; ");
+         script.append("trap 'mount -o ro,remount /system' EXIT; mount -o rw,remount /system; ");
+@@ -191,7 +194,7 @@ public final class ToolsInstaller {
+         synchronized (lock) {
+             if (installAsMagiskModule == null) {
+                 try {
+-                    installAsMagiskModule = rootShell.run(null, "[ -d /data/adb/modules -a ! -f /cache/.disable_magisk ]") == OsConstants.EXIT_SUCCESS;
++                    installAsMagiskModule = rootShell.run(null, "[ -d /data/adb/modules -a ! -f /cache/.disable_magisk ]") == EXIT_SUCCESS;
+                 } catch (final Exception ignored) {
+                     installAsMagiskModule = false;
+                 }
+ diff --git a/tunnel/src/main/java/com/wireguard/config/Interface.java b/tunnel/src/main/java/com/wireguard/config/Interface.java
+index 53ca9111..b8f7babe 100644
+--- a/tunnel/src/main/java/com/wireguard/config/Interface.java
++++ b/tunnel/src/main/java/com/wireguard/config/Interface.java
+@@ -14,6 +14,7 @@ import com.wireguard.crypto.KeyPair;
+ import com.wireguard.util.NonNullForAll;
+ 
+ import java.net.InetAddress;
++import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.LinkedHashSet;
+@@ -368,11 +369,11 @@ public final class Interface {
+         }
+ 
+         public Builder parseExcludedApplications(final CharSequence apps) {
+-            return excludeApplications(List.of(Attribute.split(apps)));
++            return excludeApplications(Arrays.asList(Attribute.split(apps)));
+         }
+ 
+         public Builder parseIncludedApplications(final CharSequence apps) {
+-            return includeApplications(List.of(Attribute.split(apps)));
++            return includeApplications(Arrays.asList(Attribute.split(apps)));
+         }
+ 
+         public Builder parseListenPort(final String listenPort) throws BadConfigException {
+-- 
+2.43.0
+
+
+From 5101270daf32dc5734d0ad83a710d648928103f9 Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Sat, 17 Oct 2026 22:36:44 +0000
+Subject: [PATCH 3/7] ui: code changes for API 16+
+
+Multidex, ABI/user-agent, RestrictionsManager, ICU formatting, camera feature check,
+RelativeLayout constructor, logcat flags, file-picker fallback, biometric guard,
+remote-control intents < API 23, tile/TV classes guarded, self-updater disabled.
+---
+ ui/src/main/AndroidManifest.xml               |  4 +-
+ .../java/com/wireguard/android/Application.kt | 14 +++-
+ .../com/wireguard/android/QuickTileService.kt |  1 +
+ .../android/activity/LogViewerActivity.kt     | 11 ++-
+ .../android/activity/SettingsActivity.kt      |  4 ++
+ .../android/activity/TunnelToggleActivity.kt  |  1 +
+ .../android/activity/TvMainActivity.kt       | 31 ++++++--
+ .../wireguard/android/configStore/FileConfigStore.kt    |  5 +-
+ .../android/fragment/AddTunnelsSheet.kt       |  7 +-
+ .../android/fragment/ConfigNamingDialogFragment.kt  |  3 +-
+ .../android/fragment/TunnelEditorFragment.kt  |  4 ++
+ .../android/fragment/TunnelListFragment.kt    |  8 ++-
+ .../wireguard/android/model/TunnelManager.kt  |  2 +-
+ .../wireguard/android/preference/ZipExporterPreference.kt |  3 +-
+ .../com/wireguard/android/updater/Updater.kt  | 11 ++-
+ .../com/wireguard/android/util/AdminKnobs.kt  | 23 ++++--
+ .../wireguard/android/util/BiometricAuthenticator.kt    |  7 ++
+ .../wireguard/android/util/ErrorMessages.kt   |  3 +-
+ .../wireguard/android/util/QuantityFormatter.kt | 72 +++++++++++--------
+ .../wireguard/android/util/TunnelImporter.kt  |  5 +-
+ .../wireguard/android/widget/MultiselectableRelativeLayout.kt   |  6 +-
+ .../wireguard/android/widget/SlashDrawable.kt   |  1 +
+ 22 files changed, 162 insertions(+), 64 deletions(-)
+
+diff --git a/ui/src/main/AndroidManifest.xml b/ui/src/main/AndroidManifest.xml
+index 86c989b3..dd98e2bb 100644
+--- a/ui/src/main/AndroidManifest.xml
++++ b/ui/src/main/AndroidManifest.xml
+@@ -6,10 +6,12 @@
+     xmlns:tools="http://schemas.android.com/tools"
+     android:installLocation="internalOnly">
+ 
++    <!-- zxing-android-embedded declares minSdk 19, but its camera scanner works on older releases too (best effort). -->
++    <uses-sdk tools:overrideLibrary="com.google.zxing.client.android" />
++
+     <uses-permission android:name="android.permission.CAMERA" />
+     <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+     <uses-permission
+         android:name="android.permission.SYSTEM_ALERT_WINDOW"
+         android:minSdkVersion="34" />
+@@ -16,6 +18,7 @@
+     <uses-permission
+         android:name="android.permission.SYSTEM_ALERT_WINDOW"
+         android:minSdkVersion="34" />
++
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+     <uses-permission android:name="android.permission.VIBRATE" />
+@@ -27,6 +30,7 @@
+     <uses-permission android:name="android.permission.YOUR_PACKAGE" />
+     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
++
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
+@@ -41,6 +45,7 @@
+     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+     <uses-permission android:name="android.permission.BLUETOOTH" />
++
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
+ 
+@@ -58,6 +63,7 @@
+     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+     <uses-permission android:name="android.permission.NFC" />
+     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
++
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+     <uses-permission android:name="android.permission.VIBRATE" />
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
+@@ -104,6 +110,7 @@
+             android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+     </application>
++
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+ </manifest>
+ diff --git a/ui/src/main/java/com/wireguard/android/Application.kt b/ui/src/main/java/com/wireguard/android/Application.kt
+index 64da5873..be2e8d77 100644
+--- a/ui/src/main/java/com/wireguard/android/Application.kt
++++ b/ui/src/main/java/com/wireguard/android/Application.kt
+@@ -16,6 +16,7 @@ import androidx.datastore.core.DataStore
+ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+ import androidx.datastore.preferences.core.Preferences
+ import androidx.datastore.preferences.preferencesDataStoreFile
++import androidx.multidex.MultiDex
+ import com.google.android.material.color.DynamicColors
+ import com.wireguard.android.backend.Backend
+ import com.wireguard.android.backend.GoBackend
+@@ -51,6 +52,8 @@ class Application : android.app.Application() {
+ 
+     override fun attachBaseContext(context: Context) {
+         super.attachBaseContext(context)
++        // Legacy multidex: a no-op on API 21+ (and when everything fits in a single dex file).
++        MultiDex.install(this)
+         if (BuildConfig.MIN_SDK_VERSION > Build.VERSION.SDK_INT) {
+             val intent = Intent(Intent.ACTION_MAIN)
+             intent.addCategory(Intent.CATEGORY_HOME)
+@@ -85,8 +88,15 @@ class Application : android.app.Application() {
+     override fun onCreate() {
+         Log.i(TAG, USER_AGENT)
+         super.onCreate()
++        // Vector drawables are shipped as XML (vectorDrawables.useSupportLibrary); let AppCompat views load them on API < 21.
++        AppCompatDelegate.setCompatVectorFromResourcesEnabled(true)
+         DynamicColors.applyToActivitiesIfAvailable(this)
+         rootShell = RootShell(applicationContext)
+         toolsInstaller = ToolsInstaller(applicationContext, rootShell)
+@@ -130,8 +135,15 @@ class Application : android.app.Application() {
+     }
+ 
+     companion object {
+-        val USER_AGENT = String.format(Locale.ENGLISH, "WireGuard/%s (Android %d; %s; %s; %s %s; %s; %s)", BuildConfig.VERSION_NAME, Build.VERSION.SDK_INT, if (Build.SUPPORTED_ABIS.isNotEmpty()) Build.SUPPORTED_ABIS[0] else "unknown ABI", Build.BOARD, Build.MANUFACTURER, Build.MODEL, Build.FINGERPRINT, BuildConfig.APPLICATION_ID)
++        val USER_AGENT = String.format(Locale.ENGLISH, "WireGuard/%s (Android %d; %s; %s; %s %s; %s; %s)", BuildConfig.VERSION_NAME, Build.VERSION.SDK_INT, primaryAbi(), Build.BOARD, Build.MANUFACTURER, Build.MODEL, Build.FINGERPRINT, BuildConfig.APPLICATION_ID)
+         private const val TAG = "WireGuard/Application"
++
++        /* Build.SUPPORTED_ABIS only exists from API 21; older releases only have the (deprecated) CPU_ABI field. */
++        @Suppress("DEPRECATION")
++        private fun primaryAbi(): String {
++            val abi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) Build.SUPPORTED_ABIS.firstOrNull() else Build.CPU_ABI
++            return if (abi.isNullOrEmpty()) "unknown ABI" else abi
++        }
+         private lateinit var weakSelf: WeakReference<Application>
+ 
+         fun get(): Application {
+@@ -16,6 +16,7 @@ import androidx.datastore.core.DataStore
+ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+ import androidx.datastore.preferences.core.Preferences
+ import androidx.datastore.preferences.preferencesDataStoreFile
++import androidx.multidex.MultiDex
+ import com.google.android.material.color.DynamicColors
+ import com.wireguard.android.backend.Backend
+ import com.wireguard.android.backend.GoBackend
+@@ -51,6 +52,8 @@ class Application : android.app.Application() {
+ 
+     override fun attachBaseContext(context: Context) {
+         super.attachBaseContext(context)
++        // Legacy multidex: a no-op on API 21+ (and when everything fits in a single dex file).
++        MultiDex.install(this)
+         if (BuildConfig.MIN_SDK_VERSION > Build.VERSION.SDK_INT) {
+             val intent = Intent(Intent.ACTION_MAIN)
+             intent.addCategory(Intent.CATEGORY_HOME)
+@@ -85,8 +88,15 @@ class Application : android.app.Application() {
+     override fun onCreate() {
+         Log.i(TAG, USER_AGENT)
+         super.onCreate()
++        // Vector drawables are shipped as XML (vectorDrawables.useSupportLibrary); let AppCompat views load them on API < 21.
++        AppCompatDelegate.setCompatVectorFromResourcesEnabled(true)
+         DynamicColors.applyToActivitiesIfAvailable(this)
+         rootShell = RootShell(applicationContext)
+         toolsInstaller = ToolsInstaller(applicationContext, rootShell)
+@@ -130,8 +135,15 @@ class Application : android.app.Application() {
+     }
+ 
+     companion object {
+-        val USER_AGENT = String.format(Locale.ENGLISH, "WireGuard/%s (Android %d; %s; %s; %s %s; %s; %s)", BuildConfig.VERSION_NAME, Build.VERSION.SDK_INT, if (Build.SUPPORTED_ABIS.isNotEmpty()) Build.SUPPORTED_ABIS[0] else "unknown ABI", Build.BOARD, Build.MANUFACTURER, Build.MODEL, Build.FINGERPRINT, BuildConfig.APPLICATION_ID)
++        val USER_AGENT = String.format(Locale.ENGLISH, "WireGuard/%s (Android %d; %s; %s; %s %s; %s; %s)", BuildConfig.VERSION_NAME, Build.VERSION.SDK_INT, primaryAbi(), Build.BOARD, Build.MANUFACTURER, Build.MODEL, Build.FINGERPRINT, BuildConfig.APPLICATION_ID)
+         private const val TAG = "WireGuard/Application"
++
++        /* Build.SUPPORTED_ABIS only exists from API 21; older releases only have the (deprecated) CPU_ABI field. */
++        @Suppress("DEPRECATION")
++        private fun primaryAbi(): String {
++            val abi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) Build.SUPPORTED_ABIS.firstOrNull() else Build.CPU_ABI
++            return if (abi.isNullOrEmpty()) "unknown ABI" else abi
++        }
+         private lateinit var weakSelf: WeakReference<Application>
+ 
+         fun get(): Application {
+@@ -16,6 +16,7 @@ import androidx.datastore.core.DataStore
+ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+ import androidx.datastore.preferences.core.Preferences
+ import androidx.datastore.preferences.preferencesDataStoreFile
++import androidx.multidex.MultiDex
+ import com.google.android.material.color.DynamicColors
+ import com.wireguard.android.backend.Backend
+ import com.wireguard.android.backend.GoBackend
+@@ -51,6 +52,8 @@ class Application : android.app.Application() {
+ 
+     override fun attachBaseContext(context: Context) {
+         super.attachBaseContext(context)
++        // Legacy multidex: a no-op on API 21+ (and when everything fits in a single dex file).
++        MultiDex.install(this)
+         if (BuildConfig.MIN_SDK_VERSION > Build.VERSION.SDK_INT) {
+             val intent = Intent(Intent.ACTION_MAIN)
+             intent.addCategory(Intent.CATEGORY_HOME)
+@@ -85,8 +88,15 @@ class Application : android.app.Application() {
+     override fun onCreate() {
+         Log.i(TAG, USER_AGENT)
+         super.onCreate()
++        // Vector drawables are shipped as XML (vectorDrawables.useSupportLibrary); let AppCompat views load them on API < 21.
++        AppCompatDelegate.setCompatVectorFromResourcesEnabled(true)
+         DynamicColors.applyToActivitiesIfAvailable(this)
+         rootShell = RootShell(applicationContext)
+         toolsInstaller = ToolsInstaller(applicationContext, rootShell)
+@@ -130,8 +135,15 @@ class Application : android.app.Application() {
+     }
+ 
+     companion object {
+-        val USER_AGENT = String.format(Locale.ENGLISH, "WireGuard/%s (Android %d; %s; %s; %s %s; %s; %s)", BuildConfig.VERSION_NAME, Build.VERSION.SDK_INT, if (Build.SUPPORTED_ABIS.isNotEmpty()) Build.SUPPORTED_ABIS[0] else "unknown ABI", Build.BOARD, Build.MANUFACTURER, Build.MODEL, Build.FINGERPRINT, BuildConfig.APPLICATION_ID)
++        val USER_AGENT = String.format(Locale.ENGLISH, "WireGuard/%s (Android %d; %s; %s; %s %s; %s; %s)", BuildConfig.VERSION_NAME, Build.VERSION.SDK_INT, primaryAbi(), Build.BOARD, Build.MANUFACTURER, Build.MODEL, Build.FINGERPRINT, BuildConfig.APPLICATION_ID)
+         private const val TAG = "WireGuard/Application"
++
++        /* Build.SUPPORTED_ABIS only exists from API 21; older releases only have the (deprecated) CPU_ABI field. */
++        @Suppress("DEPRECATION")
++        private fun primaryAbi(): String {
++            val abi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) Build.SUPPORTED_ABIS.firstOrNull() else Build.CPU_ABI
++            return if (abi.isNullOrEmpty()) "unknown ABI" else abi
++        }
+         private lateinit var weakSelf: WeakReference<Application>
+ 
+         fun get(): Application {
+-- 
+2.43.0
+
+
+From 9655559e16c167a9ebb2e0f85bec7468301ebb8b Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Sat, 17 Oct 2026 22:36:44 +0000
+Subject: [PATCH 4/7] ui: resources for API 16+
+
+Left/right/gravity/padding fallbacks for API 17-26 attributes, theme-attribute free
+list_item_background fallback, srcCompat for vector icons, new strings/colors.
+---
+ .../res/drawable/list_item_background.xml     | 27 +++++++++++++++++++
+ .../res/layout/add_tunnels_bottom_sheet.xml   |  3 +++
+ ui/src/main/res/layout/app_list_item.xml      |  3 +++
+ .../res/layout/tunnel_detail_fragment.xml     |  2 ++
+ .../res/layout/tunnel_editor_fragment.xml     |  8 ++++--
+ .../res/layout/tunnel_editor_peer.xml       |  7 ++++-
+ .../main/res/layout/tunnel_list_fragment.xml  |  2 ++
+ ui/src/main/res/layout/tunnel_list_item.xml   |  8 +++++-
+ ui/src/main/res/values-night/colors.xml       |  9 +++++++
+ ui/src/main/res/values/colors.xml             |  3 +++
+ ui/src/main/res/values/strings.xml            |  2 ++
+ 11 files changed, 70 insertions(+), 4 deletions(-)
+ create mode 100644 ui/src/main/res/drawable/list_item_background.xml
+ create mode 100644 ui/src/main/res/values-night/colors.xml
+
+diff --git a/ui/src/main/res/drawable/list_item_background.xml b/ui/src/main/res/drawable/list_item_background.xml
+new file mode 100644
+index 00000000..4d287fa2
+--- /dev/null
++++ b/ui/src/main/res/drawable/list_item_background.xml
+@@ -0,0 +1,27 @@
++<?xml version="1.0" encoding="utf-8"?><!--
++  ~ Copyright © 2017-2025 WireGuard LLC. All Rights Reserved.
++  ~ SPDX-License-Identifier: Apache-2.0
++  -->
++
++<!-- Fallback for Android versions older than 5.0: theme attributes (?attr/...) are not supported inside drawable
++     resources there, so this variant only uses plain color resources. The Lollipop+ variant lives in drawable-v21. -->
++<selector xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:app="http://schemas.android.com/apk/res-auto">
++    <item
++        android:state_activated="true"
++        app:state_multiselected="true">
++        <color android:color="@color/list_item_multiselected" />
++    </item>
++    <item android:state_activated="true">
++        <color android:color="@color/list_item_activated" />
++    </item>
++    <item android:state_pressed="true">
++        <color android:color="@color/list_item_activated" />
++    </item>
++    <item android:state_focused="true">
++        <color android:color="@color/list_item_activated" />
++    </item>
++    <item>
++        <color android:color="@android:color/transparent" />
++    </item>
++</selector>
++diff --git a/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml b/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml
++index 0ad1ef23..f005cbb6 100644
++--- a/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml
+++++ b/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml
++@@ -22,6 +22,7 @@
++         android:nextFocusForward="@id/create_from_qrcode"
++         android:text="@string/create_from_file"
++         android:textAlignment="viewStart"
+++        android:gravity="start|center_vertical"
++         android:textColor="?attr/colorOnSurface"
++         app:icon="@drawable/ic_action_open"
++         app:iconPadding="@dimen/bottom_sheet_icon_padding"
+@@ -46,7 +47,7 @@
++         android:nextFocusForward="@id/create_empty"
++         android:text="@string/create_from_qr_code"
++         android:textAlignment="viewStart"
+++        android:gravity="start|center_vertical"
++         android:textColor="?attr/colorOnSurface"
++         app:icon="@drawable/ic_action_scan_qr_code"
++         app:iconPadding="@dimen/bottom_sheet_icon_padding"
+@@ -68,6 +70,7 @@
++         android:nextFocusUp="@id/create_from_qrcode"
++         android:text="@string/create_empty"
++         android:textAlignment="viewStart"
+++        android:gravity="start|center_vertical"
++         android:textColor="?attr/colorOnSurface"
++         app:icon="@drawable/ic_action_edit"
++         app:iconPadding="@dimen/bottom_sheet_icon_padding"
+@@ -0,0 +1,27 @@
++<?xml version="1.0" encoding="utf-8"?><!--
++  ~ Copyright © 2017-2025 WireGuard LLC. All Rights Reserved.
++  ~ SPDX-License-Identifier: Apache-2.0
++  -->
++
++<!-- Fallback for Android versions older than 5.0: theme attributes (?attr/...) are not supported inside drawable
++     resources there, so this variant only uses plain color resources. The Lollipop+ variant lives in drawable-v21. -->
++<selector xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:app="http://schemas.android.com/apk/res-auto">
++    <item
++        android:state_activated="true"
++        app:state_multiselected="true">
++        <color android:color="@color/list_item_multiselected" />
++    </item>
++    <item android:state_activated="true">
++        <color android:color="@color/list_item_activated" />
++    </item>
++    <item android:state_pressed="true">
++        <color android:color="@color/list_item_activated" />
++    </item>
++    <item android:state_focused="true">
++        <color android:color="@color/list_item_activated" />
++    </item>
++    <item>
++        <color android:color="@android:color/transparent" />
++    </item>
++</selector>
++diff --git a/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml b/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml
++index 0ad1ef23..f005cbb6 100644
++--- a/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml
+++++ b/ui/src/main/res/layout/add_tunnels_bottom_sheet.xml
++@@ -22,6 +22,7 @@
++         android:nextFocusForward="@id/create_from_qrcode"
++         android:text="@string/create_from_file"
++         android:textAlignment="viewStart"
+++        android:gravity="start|center_vertical"
++         android:textColor="?attr/colorOnSurface"
++         app:icon="@drawable/ic_action_open"
++         app:iconPadding="@dimen/bottom_sheet_icon_padding"
++@@ -46,7 +47,7 @@
++         android:nextFocusForward="@id/create_empty"
++         android:text="@string/create_from_qr_code"
++         android:textAlignment="viewStart"
+++        android:gravity="start|center_vertical"
++         android:textColor="?attr/colorOnSurface"
++         app:icon="@drawable/ic_action_scan_qr_code"
++         app:iconPadding="@dimen/bottom_sheet_icon_padding"
++@@ -68,6 +70,7 @@
++         android:nextFocusUp="@id/create_from_qrcode"
++         android:text="@string/create_empty"
++         android:textAlignment="viewStart"
+++        android:gravity="start|center_vertical"
++         android:textColor="?attr/colorOnSurface"
++         app:icon="@drawable/ic_action_edit"
++         app:iconPadding="@dimen/bottom_sheet_icon_padding"
++
+***
